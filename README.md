@@ -1,4 +1,4 @@
-# Kanban Workspace
+# Kanban
 
 Base monorepo for a Trello-like kanban using:
 
