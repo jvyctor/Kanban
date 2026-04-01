@@ -1,0 +1,19 @@
+{
+  "name": "kanban-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web",
+    "apps/api"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace web\" \"npm run dev --workspace api\"",
+    "build": "npm run build --workspace web && npm run build --workspace api",
+    "lint": "npm run lint --workspace web && npm run lint --workspace api",
+    "prisma:generate": "npm run prisma:generate --workspace api",
+    "prisma:migrate": "npm run prisma:migrate --workspace api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
