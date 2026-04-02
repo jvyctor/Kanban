@@ -1,99 +1,80 @@
-# Kanban
+# Kanban Workspace
 
-Aplicacao de kanban em monorepo com frontend e backend separados.
+## Tecnologias
 
-## Stack
-
+### Frontend
 - Next.js
+- React
+- Tailwind CSS
+- Framer Motion
+- DnD Kit
+- Socket.IO Client
+- Lucide React
+
+### Backend
 - NestJS
-- PostgreSQL
 - Prisma
+- PostgreSQL
 - Redis
 - Socket.IO
+- Nodemailer
+
+### Infraestrutura
 - Docker Compose
+- npm Workspaces
 
-## Estrutura
+## Como executar
 
-```text
-.
-|-- apps/
-|   |-- api/
-|   `-- web/
-|-- docker-compose.yml
-|-- package.json
-`-- README.md
-```
-
-## Requisitos
-
-- Node.js
-- npm
-- Docker
-- Docker Compose
-
-## Configuracao
-
-Crie os arquivos de ambiente a partir dos exemplos:
+### 1. Instalar dependencias
 
 ```bash
-cp .env.example .env
-cp apps/api/.env.example apps/api/.env
+npm install
 ```
 
-Se estiver no Windows sem `cp`, crie os arquivos manualmente.
+### 2. Configurar variaveis de ambiente
 
-## Banco de dados
+Crie o arquivo `.env` na raiz do projeto com os valores necessarios para banco, redis, frontend e SMTP.
 
-Suba a infraestrutura:
+Exemplo:
+
+```env
+DATABASE_URL="postgresql://postgres:postgres@localhost:5433/kanban?schema=public"
+REDIS_URL="redis://localhost:6379"
+NEXT_PUBLIC_API_URL="http://localhost:3001"
+APP_URL="http://localhost:3000"
+SMTP_HOST="smtp.gmail.com"
+SMTP_PORT="587"
+SMTP_USER="seu-email@gmail.com"
+SMTP_PASS="sua-senha-de-app"
+SMTP_FROM="Kanban <seu-email@gmail.com>"
+```
+
+### 3. Subir banco e redis
 
 ```bash
 docker compose up -d
 ```
 
-Conexao do PostgreSQL:
-
-- Host: `localhost`
-- Port: `5433`
-- Database: `kanban`
-- User: `postgres`
-- Password: `postgres`
-
-## Instalacao
+### 4. Gerar o Prisma Client
 
 ```bash
-npm install
 npm run prisma:generate
+```
+
+### 5. Rodar as migrations
+
+```bash
 npm run prisma:migrate
 ```
 
-## Execucao
+### 6. Iniciar o projeto
 
 ```bash
 npm run dev
 ```
 
-Enderecos:
+## Enderecos locais
 
 - Frontend: `http://localhost:3000`
 - API: `http://localhost:3001`
 - Health check: `http://localhost:3001/health`
-
-## Scripts
-
-```bash
-npm run dev
-npm run build
-npm run lint
-npm run prisma:generate
-npm run prisma:migrate
-```
-
-## pgAdmin
-
-Exemplo de consulta:
-
-```sql
-select * from boards;
-select * from board_lists order by position;
-select * from cards order by list_id, position;
-```
