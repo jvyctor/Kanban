@@ -23,7 +23,7 @@ export type MembershipPermissions = {
   canMoveCards: boolean;
   canComment: boolean;
 };
-export type BoardMember = { id: string; displayName: string; email: string; role: BoardRole };
+export type BoardMember = { id: string; displayName: string; role: BoardRole };
 export type BoardMemberWithState = BoardMember & {
   isOnline: boolean;
   permissions: MembershipPermissions;
@@ -33,14 +33,14 @@ export type BoardInvitation = {
   id: string;
   invitedEmail: string;
   role: BoardRole;
-  invitedBy: { id: string; displayName: string; email: string };
+  invitedBy: { id: string; displayName: string };
 };
 
 export type CardComment = {
   id: string;
   content: string;
   createdAt: string;
-  author: { id: string; displayName: string; email: string };
+  author: { id: string; displayName: string };
 };
 
 export type BoardCard = {
@@ -141,17 +141,56 @@ export const columnPalette = ["#6366f1", "#f59e0b", "#8b5cf6", "#22c55e", "#ec48
 export function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message.trim()) {
     try {
-      const parsed = JSON.parse(error.message) as { message?: string | string[] };
+      const parsed = JSON.parse(error.message) as {
+        message?: string | string[];
+        retryAfterSeconds?: number;
+        statusCode?: number;
+      };
+
+      if (parsed.statusCode === 429 || parsed.message === "Too many requests") {
+        const retryAfter = Number(parsed.retryAfterSeconds ?? 0);
+
+        if (retryAfter > 0) {
+          return `Muitas tentativas. Aguarde ${retryAfter} segundo(s) e tente novamente.`;
+        }
+
+        return "Muitas tentativas. Aguarde um pouco e tente novamente.";
+      }
 
       if (Array.isArray(parsed.message) && parsed.message.length > 0) {
         return parsed.message[0];
       }
 
-      if (typeof parsed.message === "string" && parsed.message.trim()) {
+      const safeMessages = new Set([
+        "Authentication required",
+        "Invalid credentials",
+        "Board access denied",
+        "Insufficient board role",
+        "Insufficient board permission",
+        "Invitation not found",
+        "Invitation expired",
+        "Invitation already accepted",
+        "Reset token is invalid or expired",
+        "Email already in use",
+        "Member not found",
+        "List not found",
+        "Card not found",
+        "Board not found",
+        "There is already a pending invitation for this user",
+        "User is already a board member",
+        "Only owners can invite admins",
+        "You are already on this board"
+      ]);
+
+      if (
+        typeof parsed.message === "string" &&
+        parsed.message.trim() &&
+        safeMessages.has(parsed.message)
+      ) {
         return parsed.message;
       }
     } catch {
-      return error.message;
+      return fallback;
     }
   }
 

@@ -5,6 +5,7 @@ import {
   ServiceUnavailableException
 } from "@nestjs/common";
 import { createTransport, type Transporter } from "nodemailer";
+import { getSmtpConfig } from "../config/runtime-config";
 
 type InvitationEmailInput = {
   to: string;
@@ -125,7 +126,8 @@ export class MailService {
   private transporter: Transporter | null = null;
 
   async sendBoardInvitation(input: InvitationEmailInput) {
-    const from = process.env.SMTP_FROM;
+    const smtp = getSmtpConfig();
+    const from = smtp.from;
 
     if (!from) {
       throw new ServiceUnavailableException("SMTP_FROM is not configured");
@@ -172,7 +174,8 @@ export class MailService {
   }
 
   async sendWelcomeEmail(input: WelcomeEmailInput) {
-    const from = process.env.SMTP_FROM;
+    const smtp = getSmtpConfig();
+    const from = smtp.from;
 
     if (!from) {
       throw new ServiceUnavailableException("SMTP_FROM is not configured");
@@ -216,7 +219,8 @@ export class MailService {
   }
 
   async sendPasswordResetEmail(input: PasswordResetEmailInput) {
-    const from = process.env.SMTP_FROM;
+    const smtp = getSmtpConfig();
+    const from = smtp.from;
 
     if (!from) {
       throw new ServiceUnavailableException("SMTP_FROM is not configured");
@@ -265,10 +269,8 @@ export class MailService {
       return this.transporter;
     }
 
-    const host = process.env.SMTP_HOST;
-    const port = Number(process.env.SMTP_PORT ?? "0");
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
+    const smtp = getSmtpConfig();
+    const { host, port, user, pass } = smtp;
 
     if (!host || !port || !user || !pass) {
       throw new ServiceUnavailableException("SMTP configuration is incomplete");
@@ -277,7 +279,10 @@ export class MailService {
     this.transporter = createTransport({
       host,
       port,
-      secure: port === 465,
+      secure: smtp.secure,
+      connectionTimeout: smtp.connectionTimeout,
+      greetingTimeout: smtp.greetingTimeout,
+      socketTimeout: smtp.socketTimeout,
       auth: {
         user,
         pass

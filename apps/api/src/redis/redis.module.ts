@@ -1,5 +1,6 @@
 import { Global, Module } from "@nestjs/common";
 import { Redis } from "ioredis";
+import { getRedisOptions, getRedisUrl } from "../config/runtime-config";
 import { RedisService } from "./redis.service";
 
 @Global()
@@ -8,10 +9,8 @@ import { RedisService } from "./redis.service";
     {
       provide: Redis,
       useFactory: () => {
-        const url = process.env.REDIS_URL ?? "redis://localhost:6379";
-        return new Redis(url, {
-          maxRetriesPerRequest: 1
-        });
+        const client = new Redis(getRedisUrl(), getRedisOptions());
+        return client;
       }
     },
     RedisService

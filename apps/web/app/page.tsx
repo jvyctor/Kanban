@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { BoardClient } from "./board-client";
 
 export default async function Home({
@@ -5,6 +6,8 @@ export default async function Home({
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await connection();
+
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const inviteParam = resolvedSearchParams?.invite;

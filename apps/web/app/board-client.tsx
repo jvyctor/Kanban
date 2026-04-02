@@ -1360,7 +1360,7 @@ export function BoardClient({ apiUrl, initialInviteToken, initialResetToken }: P
                               {member.displayName}
                             </strong>
                             <span className="block truncate text-sm text-[color:var(--ui-muted)]">
-                              {member.email}
+                              {member.role}
                             </span>
                             <span className="mt-1 block text-xs text-[color:var(--ui-muted)]">
                               {member.isOnline ? "Online no kanban" : "Offline"}

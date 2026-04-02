@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { createHash, randomBytes } from "crypto";
+import { getSessionCookieSameSite, shouldUseSecureCookies } from "../config/runtime-config";
 import { SESSION_COOKIE_NAME, SESSION_TTL_MS } from "./auth.constants";
 
 @Injectable()
@@ -36,7 +37,13 @@ export class SessionService {
 
         const key = part.slice(0, separatorIndex).trim();
         const value = part.slice(separatorIndex + 1).trim();
-        acc[key] = decodeURIComponent(value);
+
+        try {
+          acc[key] = decodeURIComponent(value);
+        } catch {
+          return acc;
+        }
+
         return acc;
       }, {});
   }
@@ -50,15 +57,16 @@ export class SessionService {
   }
 
   private serializeCookie(token: string, expiresAt: Date) {
+    const sameSite = getSessionCookieSameSite();
     const cookieParts = [
       `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
       "Path=/",
       "HttpOnly",
-      "SameSite=Lax",
+      `SameSite=${sameSite}`,
       `Expires=${expiresAt.toUTCString()}`
     ];
 
-    if (process.env.NODE_ENV === "production") {
+    if (shouldUseSecureCookies()) {
       cookieParts.push("Secure");
     }
 

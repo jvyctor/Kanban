@@ -11,7 +11,9 @@ import { PrismaService } from "../prisma/prisma.service";
 import { CurrentUser } from "../auth/current-user.interface";
 import { SessionService } from "../auth/session.service";
 import { MailService } from "../mail/mail.service";
+import { SecurityAuditService } from "../security/security-audit.service";
 import { BoardPresenceService } from "./board-presence.service";
+import { getAppUrl } from "../config/runtime-config";
 import { AcceptBoardInvitationDto } from "./dto/accept-board-invitation.dto";
 import { CreateCardDto } from "./dto/create-card.dto";
 import { CreateCardCommentDto } from "./dto/create-card-comment.dto";
@@ -45,14 +47,12 @@ type BoardCardCommentView = {
   author: {
     id: string;
     displayName: string;
-    email: string;
   };
 };
 
 type BoardMemberView = {
   id: string;
   displayName: string;
-  email: string;
   role: BoardRole;
   isOnline: boolean;
   permissions: MembershipPermissionsView;
@@ -126,7 +126,6 @@ type BoardInvitationView = {
   invitedBy: {
     id: string;
     displayName: string;
-    email: string;
   };
 };
 
@@ -136,7 +135,8 @@ export class BoardsService {
     private readonly prisma: PrismaService,
     private readonly sessionService: SessionService,
     private readonly mailService: MailService,
-    private readonly presenceService: BoardPresenceService
+    private readonly presenceService: BoardPresenceService,
+    private readonly securityAuditService: SecurityAuditService
   ) {}
 
   async listBoards(userId: string) {
@@ -302,8 +302,7 @@ export class BoardsService {
             user: {
               select: {
                 id: true,
-                displayName: true,
-                email: true
+                displayName: true
               }
             }
           },
@@ -322,8 +321,7 @@ export class BoardsService {
             invitedBy: {
               select: {
                 id: true,
-                displayName: true,
-                email: true
+                displayName: true
               }
             }
           },
@@ -351,8 +349,7 @@ export class BoardsService {
                     user: {
                       select: {
                         id: true,
-                        displayName: true,
-                        email: true
+                        displayName: true
                       }
                     }
                   }
@@ -536,8 +533,7 @@ export class BoardsService {
         user: {
           select: {
             id: true,
-            displayName: true,
-            email: true
+            displayName: true
           }
         }
       }
@@ -716,13 +712,12 @@ export class BoardsService {
           select: {
             id: true,
             displayName: true,
-            email: true
           }
         }
       }
     });
 
-    const appUrl = process.env.APP_URL ?? "http://localhost:3000";
+    const appUrl = getAppUrl();
     const acceptUrl = `${appUrl}/?invite=${encodeURIComponent(token)}`;
 
     await this.mailService.sendBoardInvitation({
@@ -793,6 +788,12 @@ export class BoardsService {
       data: {
         acceptedAt: new Date()
       }
+    });
+
+    this.securityAuditService.info("board.invitation.accepted", {
+      boardId: invitation.boardId,
+      userId: currentUser.id,
+      invitationId: invitation.id
     });
 
     return this.getBoard(currentUser.id, invitation.boardId);
@@ -1036,7 +1037,6 @@ export class BoardsService {
       user: {
         id: string;
         displayName: string;
-        email: string;
       };
     }>;
     invitations: Array<{
@@ -1048,7 +1048,6 @@ export class BoardsService {
       invitedBy: {
         id: string;
         displayName: string;
-        email: string;
       };
     }>;
     lists: Array<{
@@ -1072,7 +1071,6 @@ export class BoardsService {
           user: {
             id: string;
             displayName: string;
-            email: string;
           };
         }>;
       }>;
@@ -1090,7 +1088,6 @@ export class BoardsService {
       members: board.memberships.map((membership) => ({
         id: membership.user.id,
         displayName: membership.user.displayName,
-        email: membership.user.email,
         role: membership.role,
         isOnline: this.presenceService.isOnline(board.id, membership.user.id),
         permissions: this.mapPermissions(membership)
@@ -1128,8 +1125,7 @@ export class BoardsService {
             createdAt: comment.createdAt.toISOString(),
             author: {
               id: comment.user.id,
-              displayName: comment.user.displayName,
-              email: comment.user.email
+              displayName: comment.user.displayName
             }
           }))
         }))

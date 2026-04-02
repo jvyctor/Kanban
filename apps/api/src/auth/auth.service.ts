@@ -7,9 +7,13 @@ import {
   UnauthorizedException
 } from "@nestjs/common";
 import { AppRole } from "@prisma/client";
+import { createHash } from "crypto";
+import { SecurityAuditService } from "../security/security-audit.service";
 import { MailService } from "../mail/mail.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { getAppUrl } from "../config/runtime-config";
 import { CurrentUser } from "./current-user.interface";
+import { SESSION_COOKIE_NAME } from "./auth.constants";
 import { LoginDto } from "./dto/login.dto";
 import { RequestPasswordResetDto } from "./dto/request-password-reset.dto";
 import { RegisterDto } from "./dto/register.dto";
@@ -27,7 +31,8 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
     private readonly passwordService: PasswordService,
-    private readonly sessionService: SessionService
+    private readonly sessionService: SessionService,
+    private readonly securityAuditService: SecurityAuditService
   ) {}
 
   async register(registerDto: RegisterDto) {
@@ -59,7 +64,7 @@ export class AuthService {
       await this.mailService.sendWelcomeEmail({
         to: email,
         displayName,
-        appUrl: process.env.APP_URL ?? "http://localhost:3000"
+        appUrl: getAppUrl()
       });
     } catch (error) {
       this.logger.warn(`Welcome email failed for ${email}`);
@@ -76,6 +81,10 @@ export class AuthService {
     });
 
     if (!user) {
+      this.securityAuditService.warn("auth.login.failed", {
+        reason: "user_not_found",
+        emailHash: this.hashIdentifier(email)
+      });
       throw new UnauthorizedException("Invalid credentials");
     }
 
@@ -85,6 +94,11 @@ export class AuthService {
     );
 
     if (!isValidPassword) {
+      this.securityAuditService.warn("auth.login.failed", {
+        reason: "invalid_password",
+        userId: user.id,
+        emailHash: this.hashIdentifier(email)
+      });
       throw new UnauthorizedException("Invalid credentials");
     }
 
@@ -103,6 +117,9 @@ export class AuthService {
     });
 
     if (!user) {
+      this.securityAuditService.info("auth.password_reset.request_ignored", {
+        emailHash: this.hashIdentifier(email)
+      });
       return;
     }
 
@@ -128,7 +145,12 @@ export class AuthService {
     await this.mailService.sendPasswordResetEmail({
       to: user.email,
       displayName: user.displayName,
-      resetUrl: `${process.env.APP_URL ?? "http://localhost:3000"}/?reset=${encodeURIComponent(token)}`
+      resetUrl: `${getAppUrl()}/?reset=${encodeURIComponent(token)}`
+    });
+
+    this.securityAuditService.info("auth.password_reset.requested", {
+      userId: user.id,
+      emailHash: this.hashIdentifier(user.email)
     });
   }
 
@@ -142,6 +164,10 @@ export class AuthService {
     });
 
     if (!resetToken || resetToken.usedAt || resetToken.expiresAt <= new Date()) {
+      this.securityAuditService.warn("auth.password_reset.failed", {
+        reason: "invalid_or_expired_token",
+        tokenHash
+      });
       throw new BadRequestException("Reset token is invalid or expired");
     }
 
@@ -168,6 +194,10 @@ export class AuthService {
         }
       })
     ]);
+
+    this.securityAuditService.info("auth.password_reset.completed", {
+      userId: resetToken.userId
+    });
   }
 
   async logoutFromHeaders(headers: Record<string, string | string[] | undefined>) {
@@ -281,7 +311,7 @@ export class AuthService {
 
   private readSessionTokenFromHeaders(headers: Record<string, string | string[] | undefined>) {
     const cookies = this.sessionService.parseCookies(headers.cookie);
-    return cookies.kanban_session ?? null;
+    return cookies[SESSION_COOKIE_NAME] ?? null;
   }
 
   private async createStarterBoardForUser(userId: string, displayName: string) {
@@ -333,5 +363,9 @@ export class AuthService {
       displayName: user.displayName,
       appRole: user.appRole
     };
+  }
+
+  private hashIdentifier(value: string) {
+    return createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
   }
 }

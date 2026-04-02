@@ -10,6 +10,8 @@
     "dev": "concurrently \"npm run dev --workspace web\" \"npm run dev --workspace api\"",
     "build": "npm run build --workspace web && npm run build --workspace api",
     "lint": "npm run lint --workspace web && npm run lint --workspace api",
+    "smoke": "node scripts/smoke-check.mjs",
+    "load:ws": "node scripts/load-test-websocket.mjs",
     "prisma:generate": "npm run prisma:generate --workspace api",
     "prisma:migrate": "npm run prisma:migrate --workspace api"
   },

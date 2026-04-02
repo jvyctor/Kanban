@@ -14,6 +14,7 @@ import { AppRole } from "@prisma/client";
 import { AuthService } from "./auth.service";
 import { CurrentUser } from "./current-user.interface";
 import { CurrentUserDecorator } from "./decorators/current-user.decorator";
+import { AuthRateLimit } from "./decorators/rate-limit.decorator";
 import { RequireAppRoles } from "./decorators/roles.decorator";
 import { LoginDto } from "./dto/login.dto";
 import { RequestPasswordResetDto } from "./dto/request-password-reset.dto";
@@ -21,6 +22,7 @@ import { RegisterDto } from "./dto/register.dto";
 import { ResetPasswordDto } from "./dto/reset-password.dto";
 import { UpdateUserRoleDto } from "./dto/update-user-role.dto";
 import { AppRoleGuard } from "./guards/app-role.guard";
+import { AuthRateLimitGuard } from "./guards/auth-rate-limit.guard";
 import { AuthGuard } from "./guards/auth.guard";
 import { SessionService } from "./session.service";
 
@@ -32,6 +34,8 @@ export class AuthController {
   ) {}
 
   @Post("auth/register")
+  @UseGuards(AuthRateLimitGuard)
+  @AuthRateLimit({ key: "auth-register", limit: 5, windowSeconds: 60 * 15 })
   async register(
     @Body() registerDto: RegisterDto,
     @Res({ passthrough: true }) response: { setHeader(name: string, value: string): void }
@@ -49,6 +53,15 @@ export class AuthController {
 
   @HttpCode(200)
   @Post("auth/login")
+  @UseGuards(AuthRateLimitGuard)
+  @AuthRateLimit({
+    key: "auth-login",
+    limit: 10,
+    windowSeconds: 60 * 15,
+    identifierField: "email",
+    identifierLimit: 5,
+    identifierWindowSeconds: 60 * 15
+  })
   async login(
     @Body() loginDto: LoginDto,
     @Res({ passthrough: true }) response: { setHeader(name: string, value: string): void }
@@ -66,12 +79,23 @@ export class AuthController {
 
   @HttpCode(204)
   @Post("auth/password-reset/request")
+  @UseGuards(AuthRateLimitGuard)
+  @AuthRateLimit({
+    key: "auth-password-reset-request",
+    limit: 5,
+    windowSeconds: 60 * 15,
+    identifierField: "email",
+    identifierLimit: 3,
+    identifierWindowSeconds: 60 * 15
+  })
   async requestPasswordReset(@Body() requestDto: RequestPasswordResetDto) {
     await this.authService.requestPasswordReset(requestDto);
   }
 
   @HttpCode(204)
   @Post("auth/password-reset/confirm")
+  @UseGuards(AuthRateLimitGuard)
+  @AuthRateLimit({ key: "auth-password-reset-confirm", limit: 5, windowSeconds: 60 * 15 })
   async resetPassword(@Body() resetDto: ResetPasswordDto) {
     await this.authService.resetPassword(resetDto);
   }
