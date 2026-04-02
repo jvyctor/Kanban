@@ -1,4 +1,14 @@
-import { IsOptional, IsString, MinLength } from "class-validator";
+import { Type } from "class-transformer";
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsDate,
+  IsIn,
+  IsOptional,
+  IsString,
+  MinLength
+} from "class-validator";
+import { cardPriorities } from "./card-priority.enum";
 
 export class CreateCardDto {
   @IsString()
@@ -13,6 +23,21 @@ export class CreateCardDto {
   description?: string;
 
   @IsOptional()
+  @IsIn(cardPriorities)
+  priority?: (typeof cardPriorities)[number];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @IsString({ each: true })
+  tags?: string[];
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  dueDate?: Date;
+
+  @IsOptional()
   @IsString()
-  assignee?: string;
+  assigneeId?: string;
 }

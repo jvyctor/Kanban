@@ -1,13 +1,24 @@
 import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Injectable,
-  NotFoundException,
-  OnModuleInit
+  NotFoundException
 } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import { BoardRole, CardPriority, Prisma } from "@prisma/client";
+import { randomBytes } from "crypto";
 import { PrismaService } from "../prisma/prisma.service";
+import { CurrentUser } from "../auth/current-user.interface";
+import { SessionService } from "../auth/session.service";
+import { MailService } from "../mail/mail.service";
+import { BoardPresenceService } from "./board-presence.service";
+import { AcceptBoardInvitationDto } from "./dto/accept-board-invitation.dto";
 import { CreateCardDto } from "./dto/create-card.dto";
+import { CreateCardCommentDto } from "./dto/create-card-comment.dto";
+import { CreateBoardInvitationDto } from "./dto/create-board-invitation.dto";
 import { CreateListDto } from "./dto/create-list.dto";
 import type { MoveCardDto } from "./dto/move-card.dto";
+import { UpdateMemberPermissionsDto } from "./dto/update-member-permissions.dto";
 import { UpdateCardDto } from "./dto/update-card.dto";
 import { UpdateListDto } from "./dto/update-list.dto";
 
@@ -15,8 +26,36 @@ type BoardCardView = {
   id: string;
   title: string;
   description: string;
-  assignee: string;
+  priority: CardPriority;
+  tags: string[];
+  dueDate: string | null;
+  createdAt: string;
+  assignee: {
+    id: string;
+    displayName: string;
+  } | null;
   position: number;
+  comments: BoardCardCommentView[];
+};
+
+type BoardCardCommentView = {
+  id: string;
+  content: string;
+  createdAt: string;
+  author: {
+    id: string;
+    displayName: string;
+    email: string;
+  };
+};
+
+type BoardMemberView = {
+  id: string;
+  displayName: string;
+  email: string;
+  role: BoardRole;
+  isOnline: boolean;
+  permissions: MembershipPermissionsView;
 };
 
 type BoardListView = {
@@ -29,25 +68,269 @@ type BoardListView = {
 export type BoardView = {
   id: string;
   title: string;
+  role: BoardRole;
+  permissions: MembershipPermissionsView;
+  members: BoardMemberView[];
+  invitations: BoardInvitationView[];
   lists: BoardListView[];
 };
 
-const DEMO_BOARD_ID = "demo";
+type MembershipPermissionsView = {
+  canManageMembers: boolean;
+  canInviteMembers: boolean;
+  canCreateLists: boolean;
+  canEditLists: boolean;
+  canCreateCards: boolean;
+  canEditCards: boolean;
+  canMoveCards: boolean;
+  canComment: boolean;
+};
+
+type DashboardBoardView = {
+  id: string;
+  title: string;
+  role: BoardRole;
+  memberCount: number;
+  totalCards: number;
+  pendingCards: number;
+  assignedToMe: number;
+  highPriorityCards: number;
+};
+
+type DashboardTaskView = {
+  id: string;
+  title: string;
+  priority: CardPriority;
+  dueDate: string | null;
+  boardId: string;
+  boardTitle: string;
+  listId: string;
+  listTitle: string;
+};
+
+type DashboardInvitationView = {
+  id: string;
+  boardId: string;
+  boardTitle: string;
+  role: BoardRole;
+  invitedByName: string;
+  expiresAt: string;
+};
+
+type BoardInvitationView = {
+  id: string;
+  invitedEmail: string;
+  role: BoardRole;
+  createdAt: Date;
+  expiresAt: Date;
+  invitedBy: {
+    id: string;
+    displayName: string;
+    email: string;
+  };
+};
 
 @Injectable()
-export class BoardsService implements OnModuleInit {
-  constructor(private readonly prisma: PrismaService) {}
+export class BoardsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly sessionService: SessionService,
+    private readonly mailService: MailService,
+    private readonly presenceService: BoardPresenceService
+  ) {}
 
-  async onModuleInit() {
-    await this.ensureDemoBoard();
+  async listBoards(userId: string) {
+    const memberships = await this.prisma.membership.findMany({
+      where: { userId },
+      orderBy: {
+        createdAt: "asc"
+      },
+      include: {
+        board: {
+          select: {
+            id: true,
+            title: true,
+            updatedAt: true
+          }
+        }
+      }
+    });
+
+    return memberships.map((membership) => ({
+      id: membership.board.id,
+      title: membership.board.title,
+      role: membership.role,
+      updatedAt: membership.board.updatedAt
+    }));
   }
 
-  async getBoard(boardId: string) {
-    await this.ensureDemoBoard();
+  async getDashboard(userId: string) {
+    const memberships = await this.prisma.membership.findMany({
+      where: { userId },
+      include: {
+        board: {
+          include: {
+            memberships: {
+              select: { userId: true }
+            },
+            lists: {
+              include: {
+                cards: {
+                  select: {
+                    id: true,
+                    priority: true,
+                    assigneeId: true
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      orderBy: {
+        createdAt: "asc"
+      }
+    });
+
+    const assignedCards = await this.prisma.card.findMany({
+      where: {
+        assigneeId: userId,
+        list: {
+          board: {
+            memberships: {
+              some: {
+                userId
+              }
+            }
+          }
+        }
+      },
+      include: {
+        list: {
+          include: {
+            board: {
+              select: {
+                id: true,
+                title: true
+              }
+            }
+          }
+        }
+      },
+      orderBy: [
+        { dueDate: "asc" },
+        { createdAt: "desc" }
+      ]
+    });
+
+    const invitations = await this.prisma.boardInvitation.findMany({
+      where: {
+        invitedUserId: userId,
+        acceptedAt: null,
+        expiresAt: {
+          gt: new Date()
+        }
+      },
+      include: {
+        board: {
+          select: {
+            id: true,
+            title: true
+          }
+        },
+        invitedBy: {
+          select: {
+            displayName: true
+          }
+        }
+      },
+      orderBy: {
+        createdAt: "desc"
+      }
+    });
+
+    return {
+      boards: memberships.map((membership) => {
+        const lists = membership.board.lists;
+        const cards = lists.flatMap((list) => list.cards);
+        const pendingCards = lists
+          .filter((list) => !this.isCompletedListTitle(list.title))
+          .flatMap((list) => list.cards);
+
+        return {
+          id: membership.board.id,
+          title: membership.board.title,
+          role: membership.role,
+          memberCount: membership.board.memberships.length,
+          totalCards: cards.length,
+          pendingCards: pendingCards.length,
+          assignedToMe: pendingCards.filter((card) => card.assigneeId === userId).length,
+          highPriorityCards: pendingCards.filter((card) => card.priority === "HIGH").length
+        } satisfies DashboardBoardView;
+      }),
+      assignedTasks: assignedCards
+        .filter((card) => !this.isCompletedListTitle(card.list.title))
+        .map((card) => ({
+          id: card.id,
+          title: card.title,
+          priority: card.priority,
+          dueDate: card.dueDate ? card.dueDate.toISOString() : null,
+          boardId: card.list.board.id,
+          boardTitle: card.list.board.title,
+          listId: card.list.id,
+          listTitle: card.list.title
+        } satisfies DashboardTaskView)),
+      invitations: invitations.map((invitation) => ({
+        id: invitation.id,
+        boardId: invitation.board.id,
+        boardTitle: invitation.board.title,
+        role: invitation.role,
+        invitedByName: invitation.invitedBy.displayName,
+        expiresAt: invitation.expiresAt.toISOString()
+      } satisfies DashboardInvitationView))
+    };
+  }
+
+  async getBoard(userId: string, boardId: string) {
+    const membership = await this.ensureBoardAccess(userId, boardId);
 
     const board = await this.prisma.board.findUnique({
       where: { id: boardId },
       include: {
+        memberships: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                displayName: true,
+                email: true
+              }
+            }
+          },
+          orderBy: {
+            createdAt: "asc"
+          }
+        },
+        invitations: {
+          where: {
+            acceptedAt: null,
+            expiresAt: {
+              gt: new Date()
+            }
+          },
+          include: {
+            invitedBy: {
+              select: {
+                id: true,
+                displayName: true,
+                email: true
+              }
+            }
+          },
+          orderBy: {
+            createdAt: "desc"
+          }
+        },
         lists: {
           orderBy: { position: "asc" },
           include: {
@@ -56,7 +339,22 @@ export class BoardsService implements OnModuleInit {
               include: {
                 assignee: {
                   select: {
+                    id: true,
                     displayName: true
+                  }
+                },
+                comments: {
+                  orderBy: {
+                    createdAt: "asc"
+                  },
+                  include: {
+                    user: {
+                      select: {
+                        id: true,
+                        displayName: true,
+                        email: true
+                      }
+                    }
                   }
                 }
               }
@@ -70,11 +368,11 @@ export class BoardsService implements OnModuleInit {
       throw new NotFoundException("Board not found");
     }
 
-    return this.mapBoard(board);
+    return this.mapBoard(board, userId, membership.role);
   }
 
-  async createList(boardId: string, createListDto: CreateListDto) {
-    await this.getBoard(boardId);
+  async createList(userId: string, boardId: string, createListDto: CreateListDto) {
+    await this.ensureBoardPermission(userId, boardId, "canCreateLists");
 
     const lastList = await this.prisma.boardList.findFirst({
       where: { boardId },
@@ -90,7 +388,14 @@ export class BoardsService implements OnModuleInit {
     });
   }
 
-  async updateList(boardId: string, listId: string, updateListDto: UpdateListDto) {
+  async updateList(
+    userId: string,
+    boardId: string,
+    listId: string,
+    updateListDto: UpdateListDto
+  ) {
+    await this.ensureBoardPermission(userId, boardId, "canEditLists");
+
     const list = await this.prisma.boardList.findFirst({
       where: {
         id: listId,
@@ -110,7 +415,9 @@ export class BoardsService implements OnModuleInit {
     });
   }
 
-  async createCard(boardId: string, createCardDto: CreateCardDto) {
+  async createCard(userId: string, boardId: string, createCardDto: CreateCardDto) {
+    await this.ensureBoardPermission(userId, boardId, "canCreateCards");
+
     const list = await this.prisma.boardList.findFirst({
       where: {
         id: createCardDto.listId,
@@ -126,20 +433,30 @@ export class BoardsService implements OnModuleInit {
       where: { listId: list.id },
       orderBy: { position: "desc" }
     });
-    const assignee = await this.resolveAssignee(createCardDto.assignee);
+    const assignee = await this.resolveAssignee(boardId, createCardDto.assigneeId);
 
     return this.prisma.card.create({
       data: {
         title: createCardDto.title.trim(),
         description: createCardDto.description?.trim() ?? "",
+        priority: createCardDto.priority ?? "MEDIUM",
+        tags: createCardDto.tags?.map((tag) => tag.trim()).filter(Boolean) ?? [],
         position: (lastCard?.position ?? -1) + 1,
+        dueDate: createCardDto.dueDate ?? null,
         listId: list.id,
         assigneeId: assignee?.id
       }
     });
   }
 
-  async updateCard(boardId: string, cardId: string, updateCardDto: UpdateCardDto) {
+  async updateCard(
+    userId: string,
+    boardId: string,
+    cardId: string,
+    updateCardDto: UpdateCardDto
+  ) {
+    await this.ensureBoardPermission(userId, boardId, "canEditCards");
+
     const card = await this.prisma.card.findFirst({
       where: {
         id: cardId,
@@ -163,8 +480,20 @@ export class BoardsService implements OnModuleInit {
       data.description = updateCardDto.description.trim();
     }
 
-    if (updateCardDto.assignee !== undefined) {
-      const assignee = await this.resolveAssignee(updateCardDto.assignee);
+    if (updateCardDto.priority !== undefined) {
+      data.priority = updateCardDto.priority;
+    }
+
+    if (updateCardDto.tags !== undefined) {
+      data.tags = updateCardDto.tags.map((tag) => tag.trim()).filter(Boolean);
+    }
+
+    if (updateCardDto.dueDate !== undefined) {
+      data.dueDate = updateCardDto.dueDate;
+    }
+
+    if (updateCardDto.assigneeId !== undefined) {
+      const assignee = await this.resolveAssignee(boardId, updateCardDto.assigneeId);
       data.assignee = assignee
         ? { connect: { id: assignee.id } }
         : { disconnect: true };
@@ -176,7 +505,48 @@ export class BoardsService implements OnModuleInit {
     });
   }
 
-  async moveCard(boardId: string, cardId: string, move: MoveCardDto) {
+  async addCommentToCard(
+    currentUser: CurrentUser,
+    boardId: string,
+    cardId: string,
+    createCommentDto: CreateCardCommentDto
+  ) {
+    await this.ensureBoardPermission(currentUser.id, boardId, "canComment");
+
+    const card = await this.prisma.card.findFirst({
+      where: {
+        id: cardId,
+        list: {
+          boardId
+        }
+      }
+    });
+
+    if (!card) {
+      throw new NotFoundException("Card not found");
+    }
+
+    return this.prisma.cardComment.create({
+      data: {
+        cardId,
+        userId: currentUser.id,
+        content: createCommentDto.content.trim()
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            displayName: true,
+            email: true
+          }
+        }
+      }
+    });
+  }
+
+  async moveCard(userId: string, boardId: string, cardId: string, move: MoveCardDto) {
+    await this.ensureBoardPermission(userId, boardId, "canMoveCards");
+
     return this.prisma.$transaction(async (tx) => {
       const board = await tx.board.findUnique({
         where: { id: boardId },
@@ -271,122 +641,416 @@ export class BoardsService implements OnModuleInit {
     });
   }
 
-  private async ensureDemoBoard() {
-    const existingBoard = await this.prisma.board.findUnique({
-      where: { id: DEMO_BOARD_ID },
-      select: { id: true }
+  async inviteUserToBoard(
+    currentUser: CurrentUser,
+    boardId: string,
+    createInvitationDto: CreateBoardInvitationDto
+  ) {
+    const membership = await this.ensureBoardPermission(currentUser.id, boardId, "canInviteMembers");
+    const invitedEmail = createInvitationDto.email.trim().toLowerCase();
+    const invitedUser = await this.prisma.user.findUnique({
+      where: { email: invitedEmail }
     });
 
-    if (existingBoard) {
-      return;
+    if (!invitedUser) {
+      throw new NotFoundException("User with this email was not found");
     }
 
-    const ana = await this.upsertDemoUser("ana@kanban.local", "Ana");
-    const bruno = await this.upsertDemoUser("bruno@kanban.local", "Bruno");
-    const core = await this.upsertDemoUser("core@kanban.local", "Time Core");
+    if (invitedUser.id === currentUser.id) {
+      throw new BadRequestException("You are already on this board");
+    }
 
-    await this.prisma.board.create({
-      data: {
-        id: DEMO_BOARD_ID,
-        title: "Launch workspace",
-        memberships: {
-          create: [
-            { role: "OWNER", userId: ana.id },
-            { role: "ADMIN", userId: bruno.id },
-            { role: "MEMBER", userId: core.id }
-          ]
-        },
-        lists: {
-          create: [
-            {
-              id: "backlog",
-              title: "Backlog",
-              position: 0,
-              cards: {
-                create: [
-                  {
-                    id: "c1",
-                    title: "Arquitetar perfis de acesso",
-                    description: "Modelar owner, admin, member e guest.",
-                    position: 0,
-                    assigneeId: ana.id
-                  }
-                ]
-              }
-            },
-            {
-              id: "doing",
-              title: "Doing",
-              position: 1,
-              cards: {
-                create: [
-                  {
-                    id: "c2",
-                    title: "Sincronizar board em tempo real",
-                    description: "Propagar reorder e move via WebSocket.",
-                    position: 0,
-                    assigneeId: bruno.id
-                  }
-                ]
-              }
-            },
-            {
-              id: "done",
-              title: "Done",
-              position: 2,
-              cards: {
-                create: [
-                  {
-                    id: "c3",
-                    title: "Subir stack local",
-                    description: "Postgres e Redis prontos para desenvolvimento.",
-                    position: 0,
-                    assigneeId: core.id
-                  }
-                ]
-              }
-            }
-          ]
+    const existingMembership = await this.prisma.membership.findUnique({
+      where: {
+        boardId_userId: {
+          boardId,
+          userId: invitedUser.id
         }
       }
     });
-  }
 
-  private async upsertDemoUser(email: string, displayName: string) {
-    return this.prisma.user.upsert({
-      where: { email },
-      update: { displayName },
-      create: { email, displayName }
+    if (existingMembership) {
+      throw new ConflictException("User is already a board member");
+    }
+
+    const existingInvitation = await this.prisma.boardInvitation.findFirst({
+      where: {
+        boardId,
+        invitedUserId: invitedUser.id,
+        acceptedAt: null,
+        expiresAt: {
+          gt: new Date()
+        }
+      }
     });
+
+    if (existingInvitation) {
+      throw new ConflictException("There is already a pending invitation for this user");
+    }
+
+    const board = await this.prisma.board.findUnique({
+      where: { id: boardId },
+      select: { title: true }
+    });
+
+    if (!board) {
+      throw new NotFoundException("Board not found");
+    }
+
+    const token = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 3);
+    const role = this.normalizeInvitationRole(membership.role, createInvitationDto.role);
+
+    const invitation = await this.prisma.boardInvitation.create({
+      data: {
+        boardId,
+        invitedById: currentUser.id,
+        invitedUserId: invitedUser.id,
+        invitedEmail,
+        role,
+        tokenHash: this.sessionService.hashToken(token),
+        expiresAt
+      },
+      include: {
+        invitedBy: {
+          select: {
+            id: true,
+            displayName: true,
+            email: true
+          }
+        }
+      }
+    });
+
+    const appUrl = process.env.APP_URL ?? "http://localhost:3000";
+    const acceptUrl = `${appUrl}/?invite=${encodeURIComponent(token)}`;
+
+    await this.mailService.sendBoardInvitation({
+      to: invitedEmail,
+      invitedByName: currentUser.displayName,
+      boardTitle: board.title,
+      acceptUrl
+    });
+
+    return {
+      id: invitation.id,
+      invitedEmail: invitation.invitedEmail,
+      role: invitation.role,
+      expiresAt: invitation.expiresAt
+    };
   }
 
-  private async resolveAssignee(displayName?: string) {
-    const value = displayName?.trim();
+  async acceptInvitation(currentUser: CurrentUser, dto: AcceptBoardInvitationDto) {
+    const invitation = await this.prisma.boardInvitation.findUnique({
+      where: {
+        tokenHash: this.sessionService.hashToken(dto.token)
+      }
+    });
+
+    if (!invitation) {
+      throw new NotFoundException("Invitation not found");
+    }
+
+    if (invitation.acceptedAt) {
+      throw new BadRequestException("Invitation already accepted");
+    }
+
+    if (invitation.expiresAt <= new Date()) {
+      throw new BadRequestException("Invitation expired");
+    }
+
+    if (invitation.invitedUserId !== currentUser.id) {
+      throw new ForbiddenException("This invitation belongs to another user");
+    }
+
+    if (invitation.invitedEmail !== currentUser.email) {
+      throw new ForbiddenException("Invitation email does not match the authenticated user");
+    }
+
+    const membership = await this.prisma.membership.findUnique({
+      where: {
+        boardId_userId: {
+          boardId: invitation.boardId,
+          userId: currentUser.id
+        }
+      }
+    });
+
+    if (!membership) {
+      await this.prisma.membership.create({
+        data: {
+          boardId: invitation.boardId,
+          userId: currentUser.id,
+          role: invitation.role
+        }
+      });
+    }
+
+    await this.prisma.boardInvitation.update({
+      where: {
+        id: invitation.id
+      },
+      data: {
+        acceptedAt: new Date()
+      }
+    });
+
+    return this.getBoard(currentUser.id, invitation.boardId);
+  }
+
+  async updateMemberPermissions(
+    currentUser: CurrentUser,
+    boardId: string,
+    memberId: string,
+    dto: UpdateMemberPermissionsDto
+  ) {
+    const actorMembership = await this.ensureBoardPermission(
+      currentUser.id,
+      boardId,
+      "canManageMembers"
+    );
+
+    const targetMembership = await this.prisma.membership.findUnique({
+      where: {
+        boardId_userId: {
+          boardId,
+          userId: memberId
+        }
+      },
+      include: {
+        user: {
+          select: {
+            id: true
+          }
+        }
+      }
+    });
+
+    if (!targetMembership) {
+      throw new NotFoundException("Member not found");
+    }
+
+    if (targetMembership.role === "OWNER") {
+      throw new ForbiddenException("Owner permissions cannot be changed");
+    }
+
+    if (actorMembership.role !== "OWNER" && targetMembership.role === "ADMIN") {
+      throw new ForbiddenException("Only owners can change administrator permissions");
+    }
+
+    const nextRole = dto.role ?? targetMembership.role;
+
+    if (nextRole === "OWNER") {
+      throw new BadRequestException("Owner role cannot be assigned here");
+    }
+
+    if (actorMembership.role !== "OWNER" && nextRole === "ADMIN") {
+      throw new ForbiddenException("Only owners can grant administrator permissions");
+    }
+
+    const defaults = this.getDefaultPermissionsForRole(nextRole);
+
+    await this.prisma.membership.update({
+      where: {
+        boardId_userId: {
+          boardId,
+          userId: memberId
+        }
+      },
+      data: {
+        role: nextRole,
+        canManageMembers: dto.canManageMembers ?? defaults.canManageMembers,
+        canInviteMembers: dto.canInviteMembers ?? defaults.canInviteMembers,
+        canCreateLists: dto.canCreateLists ?? defaults.canCreateLists,
+        canEditLists: dto.canEditLists ?? defaults.canEditLists,
+        canCreateCards: dto.canCreateCards ?? defaults.canCreateCards,
+        canEditCards: dto.canEditCards ?? defaults.canEditCards,
+        canMoveCards: dto.canMoveCards ?? defaults.canMoveCards,
+        canComment: dto.canComment ?? defaults.canComment
+      }
+    });
+
+    return this.getBoard(currentUser.id, boardId);
+  }
+
+  async ensureBoardAccess(
+    userId: string,
+    boardId: string,
+    allowedRoles?: BoardRole[]
+  ) {
+    const membership = await this.prisma.membership.findUnique({
+      where: {
+        boardId_userId: {
+          boardId,
+          userId
+        }
+      }
+    });
+
+    if (!membership) {
+      throw new ForbiddenException("Board access denied");
+    }
+
+    if (allowedRoles && !allowedRoles.includes(membership.role)) {
+      throw new ForbiddenException("Insufficient board role");
+    }
+
+    return membership;
+  }
+
+  async ensureBoardPermission(
+    userId: string,
+    boardId: string,
+    permission: keyof MembershipPermissionsView
+  ) {
+    const membership = await this.ensureBoardAccess(userId, boardId);
+
+    if (membership.role === "OWNER") {
+      return membership;
+    }
+
+    if (!membership[permission]) {
+      throw new ForbiddenException("Insufficient board permission");
+    }
+
+    return membership;
+  }
+
+  private async resolveAssignee(boardId: string, assigneeId?: string) {
+    const value = assigneeId?.trim();
 
     if (!value) {
       return null;
     }
 
-    const email = `${value
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]+/g, ".")
-      .replace(/(^\.|\.$)/g, "")}@kanban.local`;
-
-    return this.prisma.user.upsert({
-      where: { email },
-      update: { displayName: value },
-      create: {
-        email,
-        displayName: value
+    const membership = await this.prisma.membership.findUnique({
+      where: {
+        boardId_userId: {
+          boardId,
+          userId: value
+        }
+      },
+      include: {
+        user: true
       }
     });
+
+    return membership?.user ?? null;
+  }
+
+  private normalizeInvitationRole(actorRole: BoardRole, requestedRole?: BoardRole) {
+    const role = requestedRole ?? "MEMBER";
+
+    if (role === "OWNER") {
+      throw new BadRequestException("Invitations cannot grant owner role");
+    }
+
+    if (actorRole !== "OWNER" && role === "ADMIN") {
+      throw new ForbiddenException("Only owners can invite admins");
+    }
+
+    return role;
+  }
+
+  private mapPermissions(membership: {
+    canManageMembers: boolean;
+    canInviteMembers: boolean;
+    canCreateLists: boolean;
+    canEditLists: boolean;
+    canCreateCards: boolean;
+    canEditCards: boolean;
+    canMoveCards: boolean;
+    canComment: boolean;
+  }): MembershipPermissionsView {
+    return {
+      canManageMembers: membership.canManageMembers,
+      canInviteMembers: membership.canInviteMembers,
+      canCreateLists: membership.canCreateLists,
+      canEditLists: membership.canEditLists,
+      canCreateCards: membership.canCreateCards,
+      canEditCards: membership.canEditCards,
+      canMoveCards: membership.canMoveCards,
+      canComment: membership.canComment
+    };
+  }
+
+  private getDefaultPermissionsForRole(role: BoardRole): MembershipPermissionsView {
+    if (role === "OWNER" || role === "ADMIN") {
+      return {
+        canManageMembers: true,
+        canInviteMembers: true,
+        canCreateLists: true,
+        canEditLists: true,
+        canCreateCards: true,
+        canEditCards: true,
+        canMoveCards: true,
+        canComment: true
+      };
+    }
+
+    if (role === "MEMBER") {
+      return {
+        canManageMembers: false,
+        canInviteMembers: false,
+        canCreateLists: true,
+        canEditLists: true,
+        canCreateCards: true,
+        canEditCards: true,
+        canMoveCards: true,
+        canComment: true
+      };
+    }
+
+    return {
+      canManageMembers: false,
+      canInviteMembers: false,
+      canCreateLists: false,
+      canEditLists: false,
+      canCreateCards: false,
+      canEditCards: false,
+      canMoveCards: false,
+      canComment: true
+    };
+  }
+
+  private isCompletedListTitle(title: string) {
+    const normalized = title.trim().toLowerCase();
+    return ["done", "concluido", "concluído", "finalizado", "completed"].some((value) =>
+      normalized.includes(value)
+    );
   }
 
   private mapBoard(board: {
     id: string;
     title: string;
+    memberships: Array<{
+      role: BoardRole;
+      canManageMembers: boolean;
+      canInviteMembers: boolean;
+      canCreateLists: boolean;
+      canEditLists: boolean;
+      canCreateCards: boolean;
+      canEditCards: boolean;
+      canMoveCards: boolean;
+      canComment: boolean;
+      user: {
+        id: string;
+        displayName: string;
+        email: string;
+      };
+    }>;
+    invitations: Array<{
+      id: string;
+      invitedEmail: string;
+      role: BoardRole;
+      createdAt: Date;
+      expiresAt: Date;
+      invitedBy: {
+        id: string;
+        displayName: string;
+        email: string;
+      };
+    }>;
     lists: Array<{
       id: string;
       title: string;
@@ -395,14 +1059,50 @@ export class BoardsService implements OnModuleInit {
         id: string;
         title: string;
         description: string | null;
+        priority: CardPriority;
+        tags: string[];
         position: number;
-        assignee: { displayName: string } | null;
+        dueDate: Date | null;
+        createdAt: Date;
+        assignee: { id: string; displayName: string } | null;
+        comments: Array<{
+          id: string;
+          content: string;
+          createdAt: Date;
+          user: {
+            id: string;
+            displayName: string;
+            email: string;
+          };
+        }>;
       }>;
     }>;
-  }): BoardView {
+  }, currentUserId: string, role: BoardRole): BoardView {
+    const currentMembership = board.memberships.find((membership) => membership.user.id === currentUserId);
+
     return {
       id: board.id,
       title: board.title,
+      role,
+      permissions: currentMembership
+        ? this.mapPermissions(currentMembership)
+        : this.getDefaultPermissionsForRole(role),
+      members: board.memberships.map((membership) => ({
+        id: membership.user.id,
+        displayName: membership.user.displayName,
+        email: membership.user.email,
+        role: membership.role,
+        isOnline: this.presenceService.isOnline(board.id, membership.user.id),
+        permissions: this.mapPermissions(membership)
+      })),
+      invitations: board.invitations.map((invitation) => ({
+        id: invitation.id,
+        invitedEmail: invitation.invitedEmail,
+        role: invitation.role,
+        createdAt: invitation.createdAt,
+        expiresAt: invitation.expiresAt,
+        invitedBy: invitation.invitedBy
+      })),
       lists: board.lists.map((list) => ({
         id: list.id,
         title: list.title,
@@ -411,8 +1111,27 @@ export class BoardsService implements OnModuleInit {
           id: card.id,
           title: card.title,
           description: card.description ?? "",
-          assignee: card.assignee?.displayName ?? "Sem responsavel",
-          position: card.position
+          priority: card.priority,
+          tags: card.tags,
+          dueDate: card.dueDate ? card.dueDate.toISOString() : null,
+          createdAt: card.createdAt.toISOString(),
+          assignee: card.assignee
+            ? {
+                id: card.assignee.id,
+                displayName: card.assignee.displayName
+              }
+            : null,
+          position: card.position,
+          comments: card.comments.map((comment) => ({
+            id: comment.id,
+            content: comment.content,
+            createdAt: comment.createdAt.toISOString(),
+            author: {
+              id: comment.user.id,
+              displayName: comment.user.displayName,
+              email: comment.user.email
+            }
+          }))
         }))
       }))
     };

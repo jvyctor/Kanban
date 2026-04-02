@@ -1,35 +1,99 @@
 # Kanban
 
-Base monorepo for a Trello-like kanban using:
+Aplicacao de kanban em monorepo com frontend e backend separados.
 
-- Next.js + TypeScript
+## Stack
+
+- Next.js
 - NestJS
 - PostgreSQL
 - Prisma
 - Redis
-- WebSocket
+- Socket.IO
+- Docker Compose
 
-## Structure
+## Estrutura
 
-- `apps/web`: Next.js frontend
-- `apps/api`: NestJS backend with REST, Prisma, Redis and Socket.IO gateway
-- `docker-compose.yml`: local PostgreSQL and Redis
+```text
+.
+|-- apps/
+|   |-- api/
+|   `-- web/
+|-- docker-compose.yml
+|-- package.json
+`-- README.md
+```
 
-## Getting started
+## Requisitos
 
-1. Copy `.env.example` to `.env`
-2. Start infrastructure with `docker compose up -d`
-3. Install dependencies with `npm install`
-4. Generate Prisma client with `npm run prisma:generate`
-5. Run migrations with `npm run prisma:migrate`
-6. Start both apps with `npm run dev`
+- Node.js
+- npm
+- Docker
+- Docker Compose
 
-## First delivery
+## Configuracao
 
-This scaffold already includes:
+Crie os arquivos de ambiente a partir dos exemplos:
 
-- health endpoint
-- seeded in-memory kanban board for UI bootstrapping
-- WebSocket gateway for board events
-- Redis connectivity
-- Prisma schema for users, boards, lists and cards
+```bash
+cp .env.example .env
+cp apps/api/.env.example apps/api/.env
+```
+
+Se estiver no Windows sem `cp`, crie os arquivos manualmente.
+
+## Banco de dados
+
+Suba a infraestrutura:
+
+```bash
+docker compose up -d
+```
+
+Conexao do PostgreSQL:
+
+- Host: `localhost`
+- Port: `5433`
+- Database: `kanban`
+- User: `postgres`
+- Password: `postgres`
+
+## Instalacao
+
+```bash
+npm install
+npm run prisma:generate
+npm run prisma:migrate
+```
+
+## Execucao
+
+```bash
+npm run dev
+```
+
+Enderecos:
+
+- Frontend: `http://localhost:3000`
+- API: `http://localhost:3001`
+- Health check: `http://localhost:3001/health`
+
+## Scripts
+
+```bash
+npm run dev
+npm run build
+npm run lint
+npm run prisma:generate
+npm run prisma:migrate
+```
+
+## pgAdmin
+
+Exemplo de consulta:
+
+```sql
+select * from boards;
+select * from board_lists order by position;
+select * from cards order by list_id, position;
+```

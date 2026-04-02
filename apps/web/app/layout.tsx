@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
+import { Geist } from "next/font/google";
 import "./globals.css";
+
+const geist = Geist({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Kanban Pro",
-  description: "Base stack for a Trello-like kanban built with Next.js and NestJS."
+  description: "Gerencie seus projetos de forma inteligente com um kanban moderno."
 };
 
 export default function RootLayout({
@@ -13,7 +16,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-BR">
-      <body>{children}</body>
+      <body className={`${geist.className} antialiased`}>{children}</body>
     </html>
   );
 }
